@@ -78,5 +78,9 @@ A production deployment would route all requests into a single engine loop so th
 - Under block pressure the scheduler preempts. A preempted request is invisible to the client: it still completes, it just yields the engine for a while.
 - `run_to_completion` carries a one-million-iteration guard so a pathological loop cannot hang the process.
 
+## Going deeper
+
+Each module has its own page: [Engine](Engine), [Model-and-Tokeniser](Model-and-Tokeniser), [HTTP-Server](HTTP-Server), [Paged-KV-Cache](Paged-KV-Cache), [Continuous-Batching](Continuous-Batching) and [Speculative-Decoding](Speculative-Decoding). The choices behind the split are on [Design-Decisions](Design-Decisions), and the full symbol list is on [API-Reference](API-Reference).
+
 ---
 SarmaLinux . sarmalinux.com . [forge-infer repository](https://github.com/sarmakska/forge-infer)

@@ -119,7 +119,7 @@ What I intend to add, and what I will not.
 
 ## Documentation
 
-Full write-ups live in the [wiki](https://github.com/sarmakska/forge-infer/wiki): Architecture, Paged KV-Cache, Continuous Batching, Speculative Decoding, Benchmarks, Troubleshooting and a Roadmap. The wiki pages are also mirrored under [`wiki/`](wiki) in the repository.
+Full write-ups live in the [wiki](https://github.com/sarmakska/forge-infer/wiki): Architecture and Design Decisions; a page per subsystem (Paged KV-Cache, Continuous Batching, Speculative Decoding, Engine, Model and Tokeniser, HTTP Server); and reference and operations pages (API Reference, Configuration and Tuning, Benchmarks, Testing Strategy, Security Model, Writing a Model Backend, Examples and Recipes, Comparisons, FAQ, Troubleshooting, Roadmap and Limitations). The wiki pages are also mirrored under [`wiki/`](wiki) in the repository.
 
 ## Licence
 
