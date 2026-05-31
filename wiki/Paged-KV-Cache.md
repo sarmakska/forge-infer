@@ -1,6 +1,6 @@
 # Paged KV-Cache
 
-The KV-cache stores the key and value tensors for every token a sequence has seen, so that attention does not recompute them on each step. It is the dominant consumer of memory in LLM serving, and how you allocate it decides how many sequences you can run at once. forge-infer implements the block-based paged allocator that vLLM popularised. This page explains why, and how the implementation in `src/paged_cache.rs` works.
+The KV-cache stores the key and value tensors for every token a sequence has seen, so attention does not recompute them each step. It is the dominant consumer of memory in LLM serving, and how you allocate it decides how many sequences you can run at once. forge-infer implements the block-based paged allocator that vLLM popularised, in `src/paged_cache.rs`. This page explains why, how it works, and walks one allocation through by hand.
 
 ## The problem with contiguous allocation
 
@@ -24,22 +24,22 @@ Split memory into fixed-size **blocks**, each holding `block_size` token slots. 
 pub struct PagedKVCache {
     block_size: usize,
     num_blocks: usize,
-    free_list: Vec<BlockId>,
+    free_list: Vec<BlockId>,        // a stack; pop from the back keeps freed blocks hot
     tables: HashMap<SeqId, BlockTable>,
 }
 ```
 
-The free list is a stack of block ids. The map holds one `BlockTable` per live sequence. The key operations:
+The key operations, all in `src/paged_cache.rs`:
 
 - `admit(seq)` registers a sequence with an empty table.
-- `blocks_needed_for(seq, extra_tokens)` answers, without mutating anything, how many new blocks a sequence would need to store `extra_tokens` more tokens. It accounts for the slack in the current final block. This is the question the scheduler asks before committing a decode step.
+- `blocks_needed_for(seq, extra_tokens)` answers, without mutating anything, how many new blocks a sequence would need to store `extra_tokens` more tokens, accounting for slack in the current final block. This is the question the scheduler asks before committing a decode step.
 - `append(seq, count)` reserves the blocks and records the tokens. It is **transactional**: it pre-checks the free count and returns `OutOfBlocks { needed, free }` without touching state if the cache cannot grow the sequence, so the scheduler can preempt and retry safely.
-- `free(seq)` returns every block to the free list and forgets the sequence. It is idempotent.
+- `free(seq)` returns every block to the free list and forgets the sequence. It is idempotent, so the scheduler can free freely.
 - `evict_largest()` frees the sequence holding the most blocks, the fallback when even preempting the running batch cannot place a new sequence.
 
 ## Lazy growth in detail
 
-A sequence's `BlockTable` reports `capacity = blocks * block_size` and `slack = capacity - num_tokens`. When you append `count` tokens, the allocator only pulls new blocks if `count` exceeds the current slack:
+A sequence's `BlockTable` reports `capacity = blocks * block_size` and `slack = capacity - num_tokens`. When you append `count` tokens, the allocator pulls new blocks only if `count` exceeds the current slack:
 
 ```rust
 let slack = table.slack(self.block_size);
@@ -50,20 +50,35 @@ let needed = if extra_tokens <= slack {
 };
 ```
 
-So the first token of a sequence pulls one block, the next `block_size - 1` tokens reuse it, and only the token that overflows the block pulls another. That is exactly the test `lazy_growth_only_allocates_when_a_block_fills` asserts.
+So the first token of a sequence pulls one block, the next `block_size - 1` tokens reuse it, and only the token that overflows the block pulls another.
+
+## Worked example
+
+A cache of 8 blocks, block size 4, one sequence growing token by token (this is `lazy_growth_only_allocates_when_a_block_fills`):
+
+| Call | num_tokens | blocks held | free blocks | why |
+| --- | ---: | ---: | ---: | --- |
+| `admit(1)` | 0 | 0 | 8 | empty table |
+| `append(1, 1)` | 1 | 1 | 7 | first token pulls a block, 3 slack |
+| `append(1, 3)` | 4 | 1 | 7 | fills the slack, no new block |
+| `append(1, 1)` | 5 | 2 | 6 | fifth token spills into a second block |
+| `free(1)` | gone | 0 | 8 | every block returns |
+
+After `free`, the freed blocks land back on the stack and the next sequence reuses them immediately. A contiguous allocator would leave a hole here that a larger request could not use; `no_external_fragmentation_after_interleaved_free` demonstrates exactly that case by freeing a middle sequence and placing a larger one in its blocks.
+
+## Failure modes
+
+- **Out of blocks.** `append` returns `CacheError::OutOfBlocks { needed, free }` and leaves the sequence untouched. The scheduler turns this into a preemption decision rather than failing the request. `out_of_blocks_is_reported_and_leaves_state_intact` asserts the failed sequence did not grow and no blocks leaked.
+- **Unknown sequence.** Appending to a sequence that was never admitted returns `CacheError::UnknownSequence(seq)` rather than panicking.
+- **Block size zero.** `new` asserts `block_size > 0`; a zero block size is a programmer error, not a runtime condition.
 
 ## What the tests prove
 
-The suite in `src/paged_cache.rs` pins down the tricky behaviour:
-
-- `allocate_and_free_round_trips`: freeing returns every block.
-- `lazy_growth_only_allocates_when_a_block_fills`: no premature allocation.
-- `internal_fragmentation_is_bounded_by_block_size`: waste stays under `block_size` per sequence.
-- `out_of_blocks_is_reported_and_leaves_state_intact`: a failed append does not partially grow a sequence.
-- `no_external_fragmentation_after_interleaved_free`: a freed middle block is immediately reusable by a larger new sequence, the property a contiguous allocator cannot offer.
-- `eviction_picks_the_largest_sequence`: the eviction policy targets the biggest consumer.
-- `blocks_needed_accounts_for_slack`: the planning query is exact.
+The suite in `src/paged_cache.rs` pins down the tricky behaviour: `allocate_and_free_round_trips`, `lazy_growth_only_allocates_when_a_block_fills`, `internal_fragmentation_is_bounded_by_block_size`, `out_of_blocks_is_reported_and_leaves_state_intact`, `no_external_fragmentation_after_interleaved_free`, `eviction_picks_the_largest_sequence`, `blocks_needed_accounts_for_slack` and `unknown_sequence_append_errors`.
 
 ## Tuning
 
 The two knobs are `num_blocks` and `block_size`, set when you construct the cache (the server uses 512 blocks of 16 in `default_state`). Larger blocks mean fewer allocator operations but more internal fragmentation; smaller blocks mean tighter packing but more bookkeeping. A block size of 16 is a sensible middle that mirrors common production settings.
+
+---
+SarmaLinux . sarmalinux.com . [forge-infer repository](https://github.com/sarmakska/forge-infer)

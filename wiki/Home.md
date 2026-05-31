@@ -1,24 +1,46 @@
 # forge-infer
 
-A minimal LLM inference server that implements the real serving techniques: paged KV-cache, continuous batching and speculative decoding.
+A minimal LLM inference server with a real paged KV-cache, continuous batching and speculative decoding. The model is a deterministic stand-in so the serving systems can be read, tested and benchmarked without a GPU.
 
-I built forge-infer to be the thing I wish I had when I first tried to understand how a modern inference server works. The papers describe paging and continuous batching at a high level, the production engines bury them under thousands of lines of CUDA, and the toy examples skip the hard parts entirely. forge-infer sits in between: the serving algorithms are implemented for real and tested, and the model behind them is a small deterministic stand-in so the whole stack builds in seconds and behaves the same way every run.
+## Thirty-second orientation
 
-## What you will find here
+A request arrives over HTTP, is tokenised, and joins a waiting queue. An engine loop runs one decode iteration at a time: a scheduler admits what fits, reserves KV blocks, preempts under pressure, runs a batched forward pass through the model, and retires finished sequences. Tokens stream back as Server-Sent Events. Three systems do the real work; the model is a one-method trait you swap out.
 
-- **[Architecture](Architecture)**: the module map, the request lifecycle, and the design decision that makes the whole thing testable without a GPU.
-- **[Paged-KV-Cache](Paged-KV-Cache)**: how block-based KV allocation works, why it removes fragmentation, and how the allocator is implemented.
-- **[Continuous-Batching](Continuous-Batching)**: iteration-level scheduling, admission control and preemption, with the exact decision rules.
-- **[Speculative-Decoding](Speculative-Decoding)**: the draft-then-verify loop, the rejection-sampling acceptance test, and the proof-by-test that the output is exact.
-- **[Benchmarks](Benchmarks)**: what forge-bench measures, how to read it, and the numbers on a typical machine.
-- **[Troubleshooting](Troubleshooting)**: build issues, runtime questions and the answers.
+```mermaid
+flowchart LR
+    C["HTTP client"] --> SRV["axum server<br/>src/server.rs"]
+    SRV --> ENG["Engine loop<br/>src/engine.rs"]
+    ENG --> SCH["Scheduler<br/>src/scheduler.rs"]
+    SCH --> KV["PagedKVCache<br/>src/paged_cache.rs"]
+    ENG --> M["Model trait<br/>src/model.rs"]
+    ENG -. "single stream" .-> SP["SpeculativeDecoder<br/>src/speculative.rs"]
 
-## The thirty-second tour
+    classDef sky fill:#0d1117,stroke:#38bdf8,color:#f5f7fa;
+    classDef cyan fill:#0d1117,stroke:#22d3ee,color:#f5f7fa;
+    classDef em fill:#0d1117,stroke:#34d399,color:#f5f7fa;
+    class C,SRV sky;
+    class ENG,SCH,KV cyan;
+    class M,SP em;
+```
+
+## Where to go next
+
+| Page | What it covers |
+| --- | --- |
+| [Architecture](Architecture) | Module map, request lifecycle, the split that makes the policy testable, concurrency model. |
+| [Paged KV-Cache](Paged-KV-Cache) | Block allocation, why it kills fragmentation, the transactional `append`, a worked allocation. |
+| [Continuous Batching](Continuous-Batching) | Iteration-level scheduling, admission, preemption and resume, with the exact decision rules. |
+| [Speculative Decoding](Speculative-Decoding) | Draft-then-verify, the rejection-sampling acceptance test, the exactness proof-by-test. |
+| [Benchmarks](Benchmarks) | What forge-bench measures, real numbers on Apple Silicon, how to read them honestly. |
+| [Roadmap and Limitations](Roadmap-and-Limitations) | What I will add, what I will not, and what this is not. |
+| [Troubleshooting](Troubleshooting) | Concrete symptoms and fixes for build and runtime issues. |
+
+## Try it now
 
 ```bash
 cargo test                                   # 37 tests across the serving stack
-cargo run --release --bin forge-infer        # start the server on 127.0.0.1:8080
-cargo run --release --bin forge-bench        # print the throughput table
+cargo run --release --bin forge-infer        # serves 127.0.0.1:8080
+cargo run --release --bin forge-bench        # prints the throughput table
 ```
 
 ```bash
@@ -26,6 +48,9 @@ curl -s localhost:8080/generate -d '{"prompt":"hello forge","max_tokens":24}'
 curl -sN localhost:8080/v1/completions -d '{"prompt":"stream me","max_tokens":20,"stream":true}'
 ```
 
-## Design philosophy
+## The one simplification, stated plainly
 
-Every component a real engine has is present and named the same way it is in the literature: a `Model` trait, a `PagedKVCache` with a block table, a `ContinuousBatchingScheduler` that produces a `StepPlan` each iteration, and a `SpeculativeDecoder` with an acceptance test. The one simplification is the model: it is a deterministic hash-based `TinyTransformer` rather than a stack of attention layers. That choice is deliberate. It keeps the build fast, it makes the speculative acceptance test assertable, and it means the project demonstrates the serving systems rather than re-implementing PyTorch. To serve a real model you would implement the `Model` trait against your weights; nothing else in the stack would change.
+Every component a real engine has is present and named the way the literature names it: a `Model` trait, a `PagedKVCache` with a block table, a `Scheduler` that returns a `StepPlan` each iteration, a `SpeculativeDecoder` with an acceptance test. The only thing faked is the model itself, a deterministic hash-based `TinyTransformer`. That keeps the build fast, the speculative acceptance test assertable, and every benchmark reproducible. To serve real text you implement `Model::forward` against your weights; nothing else in the stack changes.
+
+---
+SarmaLinux . sarmalinux.com . [forge-infer repository](https://github.com/sarmakska/forge-infer)
