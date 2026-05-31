@@ -1,5 +1,3 @@
-<p align="center"><img src=".github/brand/banner.svg" alt="forge-infer by sarmalinux" width="100%"></p>
-
 A minimal LLM inference server with a real paged KV-cache, continuous batching and speculative decoding.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
