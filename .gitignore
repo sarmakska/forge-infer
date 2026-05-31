@@ -1,0 +1,17 @@
+# Rust build output
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Coverage and profiling
+/coverage
+*.profraw
+
+# Editor and OS noise
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local environment overrides
+.env*.local
