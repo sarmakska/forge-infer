@@ -73,13 +73,12 @@ impl Engine {
     }
 
     /// Run the currently submitted work to completion and return the output
-    /// tokens of the single request whose prompt length and limit are given.
-    /// This is the convenience the HTTP layer uses: it submits one prompt then
-    /// drains it. `_prompt_len` and `_max_new` are accepted for call-site
-    /// clarity; the engine already knows the limits from `submit`.
-    pub fn scheduler_mut_run(&mut self, _prompt_len: usize, _max_new: usize) -> Vec<TokenId> {
-        let outputs = self.run_to_completion();
-        outputs
+    /// tokens of the first request. This is the convenience the HTTP layer uses
+    /// when it has submitted exactly one prompt: the engine already knows the
+    /// prompt and limit from [`Engine::submit`], so no further arguments are
+    /// needed. Returns an empty vector if nothing was submitted.
+    pub fn run_one(&mut self) -> Vec<TokenId> {
+        self.run_to_completion()
             .into_iter()
             .next()
             .map(|o| o.tokens)

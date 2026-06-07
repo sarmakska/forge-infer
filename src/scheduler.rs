@@ -284,15 +284,6 @@ impl Scheduler {
             }
         }
     }
-
-    /// Drain the ids of sequences that have finished, for the engine to flush
-    /// their results. After [`Scheduler::schedule`] these are already freed in
-    /// the cache; this is a convenience accessor over the last plan is not kept,
-    /// so callers should read `StepPlan::finished` instead. Provided for
-    /// symmetry in the engine loop.
-    pub fn take_finished(&mut self) -> Vec<SeqId> {
-        Vec::new()
-    }
 }
 
 #[cfg(test)]

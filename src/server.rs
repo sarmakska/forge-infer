@@ -94,7 +94,7 @@ fn run_prompt(state: &AppState, prompt: &str, max_tokens: usize) -> (String, usi
     let prompt_ids = tokeniser::encode(prompt);
     let mut engine = state.new_engine();
     engine.submit(1, prompt_ids.clone(), max_tokens);
-    let outputs = engine.scheduler_mut_run(prompt_ids.len(), max_tokens);
+    let outputs = engine.run_one();
     let text = tokeniser::decode(&outputs);
     (text, prompt_ids.len(), outputs.len())
 }
@@ -176,7 +176,7 @@ async fn stream_completion(
     let prompt_ids = tokeniser::encode(&req.prompt);
     let mut engine = state.new_engine();
     engine.submit(1, prompt_ids.clone(), req.max_tokens);
-    let tokens = engine.scheduler_mut_run(prompt_ids.len(), req.max_tokens);
+    let tokens = engine.run_one();
     let model = req.model.clone();
 
     let mut events: Vec<Result<Event, Infallible>> = Vec::with_capacity(tokens.len() + 1);
