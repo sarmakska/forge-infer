@@ -55,7 +55,8 @@ fn run_sequential() -> (usize, f64) {
 
 /// Continuous batching: one engine, all requests submitted up front, batch
 /// size 16. Requests share decode iterations and the engine stays saturated.
-fn run_continuous() -> (usize, f64) {
+/// Returns the peak KV blocks the run actually demanded alongside throughput.
+fn run_continuous() -> (usize, f64, usize) {
     let model = model();
     let start = Instant::now();
     let mut eng = Engine::new(
@@ -70,7 +71,8 @@ fn run_continuous() -> (usize, f64) {
     for o in eng.run_to_completion() {
         total_tokens += o.tokens.len();
     }
-    (total_tokens, start.elapsed().as_secs_f64())
+    let peak = eng.scheduler_mut().cache().peak_blocks();
+    (total_tokens, start.elapsed().as_secs_f64(), peak)
 }
 
 /// Speculative decoding for a single stream, reporting the acceptance rate.
@@ -99,7 +101,7 @@ fn main() {
     println!();
 
     let (seq_tok, seq_s) = run_sequential();
-    let (cont_tok, cont_s) = run_continuous();
+    let (cont_tok, cont_s, cont_peak) = run_continuous();
     let (spec_tok, spec_s, spec_rate) = run_speculative();
 
     let row = |name: &str, tokens: usize, secs: f64, extra: String| {
@@ -119,7 +121,7 @@ fn main() {
         "continuous-batching",
         cont_tok,
         cont_s,
-        "batch=16".to_string(),
+        format!("batch=16 peak_kv_blocks={cont_peak}"),
     );
     row(
         "speculative",

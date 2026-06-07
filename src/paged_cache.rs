@@ -80,6 +80,11 @@ pub struct PagedKVCache {
     num_blocks: usize,
     free_list: Vec<BlockId>,
     tables: HashMap<SeqId, BlockTable>,
+    /// The largest number of blocks ever simultaneously in use. This is the
+    /// real peak KV memory the workload demanded, the headline number paging is
+    /// supposed to keep low: it never exceeds `num_blocks`, and under continuous
+    /// batching it stays far below the sum of per-sequence worst cases.
+    peak_blocks: usize,
 }
 
 impl PagedKVCache {
@@ -94,6 +99,7 @@ impl PagedKVCache {
             num_blocks,
             free_list,
             tables: HashMap::new(),
+            peak_blocks: 0,
         }
     }
 
@@ -111,6 +117,14 @@ impl PagedKVCache {
 
     pub fn used_blocks(&self) -> usize {
         self.num_blocks - self.free_list.len()
+    }
+
+    /// The high-water mark of simultaneously used blocks across the cache's
+    /// lifetime. A workload that fits in `peak_blocks` blocks would run
+    /// unchanged in a cache sized to exactly that many, so this is the true
+    /// minimum capacity the run needed.
+    pub fn peak_blocks(&self) -> usize {
+        self.peak_blocks
     }
 
     /// Fraction of physical token slots that are reserved by some sequence.
@@ -172,6 +186,9 @@ impl PagedKVCache {
         }
         let table = self.tables.get_mut(&seq).expect("pre-checked membership");
         table.num_tokens += count;
+        // Record the high-water mark. Allocation only ever grows usage, so the
+        // peak can only move here.
+        self.peak_blocks = self.peak_blocks.max(self.used_blocks());
         Ok(())
     }
 
@@ -333,5 +350,33 @@ mod tests {
     fn unknown_sequence_append_errors() {
         let mut cache = PagedKVCache::new(4, 4);
         assert_eq!(cache.append(99, 1), Err(CacheError::UnknownSequence(99)));
+    }
+
+    #[test]
+    fn peak_blocks_tracks_the_high_water_mark_not_the_current_use() {
+        // Two sequences allocate three blocks at once, then one is freed. The
+        // current use drops but the recorded peak holds: paging let the run fit
+        // in three blocks even though only one is live at the end.
+        let mut cache = PagedKVCache::new(8, 4);
+        assert_eq!(cache.peak_blocks(), 0);
+
+        cache.admit(1);
+        cache.append(1, 8).unwrap(); // 2 blocks
+        cache.admit(2);
+        cache.append(2, 4).unwrap(); // 1 block, 3 in use
+        assert_eq!(cache.used_blocks(), 3);
+        assert_eq!(cache.peak_blocks(), 3);
+
+        cache.free(1); // 1 block in use now
+        assert_eq!(cache.used_blocks(), 1);
+        assert_eq!(
+            cache.peak_blocks(),
+            3,
+            "peak must not fall when blocks free"
+        );
+
+        // A later, smaller burst does not lower the recorded peak.
+        cache.append(2, 4).unwrap();
+        assert_eq!(cache.peak_blocks(), 3);
     }
 }
