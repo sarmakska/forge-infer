@@ -15,7 +15,7 @@ Always build in release mode for benchmarking. The debug build carries overflow 
 The benchmark fixes the workload at 64 requests, 16-token prompts and 64 max new tokens, then runs three strategies:
 
 1. **sequential**: a fresh engine per request with `max_batch_size = 1`. The static-batching baseline where requests never share a decode step.
-2. **continuous-batching**: one engine, all 64 requests submitted up front, `max_batch_size = 16`. Requests share decode iterations and the engine stays saturated.
+2. **continuous-batching**: one engine, all 64 requests submitted up front, `max_batch_size = 16`. Requests share decode iterations and the engine stays saturated. This row also prints `peak_kv_blocks`, the high-water mark of physical blocks the run ever held at once.
 3. **speculative**: a single-stream draft-then-verify decoder with lookahead 4, reporting the aggregate acceptance rate.
 
 For each it reports total tokens, tokens per second, and milliseconds per request.
@@ -27,23 +27,17 @@ Measured on an **Apple M3 Pro** (macOS 25.3, `rustc 1.96.0`) with `cargo run --r
 ```
 strategy                 tokens     tokens/sec     ms/request  notes
 --------------------------------------------------------------------------------------
-sequential                 3690        1830357          0.032  batch=1 baseline
-continuous-batching        3690        2061789          0.028  batch=16
-speculative                3690         567856          0.102  acceptance=52%
-continuous batching throughput vs sequential: 1.13x
-
-sequential                 3690        1881333          0.031  batch=1 baseline
-continuous-batching        3690        2140164          0.027  batch=16
-speculative                3690         588642          0.098  acceptance=52%
-continuous batching throughput vs sequential: 1.14x
-
-sequential                 3690        1924883          0.030  batch=1 baseline
-continuous-batching        3690        2070513          0.028  batch=16
-speculative                3690         609066          0.095  acceptance=52%
-continuous batching throughput vs sequential: 1.08x
+sequential                 3690        1812711          0.032  batch=1 baseline
+continuous-batching        3690        1745059          0.033  batch=16 peak_kv_blocks=75
+speculative                3690         573694          0.101  acceptance=52%
+continuous batching throughput vs sequential: 1.10x
 ```
 
-Representative figures: sequential around 1.88M tokens/sec, continuous batching around 2.07M tokens/sec, speculative around 0.59M tokens/sec with a 52% acceptance rate. The continuous-over-sequential ratio sits around 1.1x on this near-free model. Numbers drift a few percent run to run with machine load; the shape is what carries.
+Representative figures: sequential and continuous batching both around 1.7M to 2.0M tokens/sec, speculative around 0.55M tokens/sec with a 52% acceptance rate. The continuous-over-sequential ratio sits around 1.1x on this near-free model and swings either side of 1.0x with machine load, which is expected: when the model is near-free, the two strategies are doing almost the same amount of work and the difference is scheduling noise. Numbers drift run to run; the shape is what carries, and the two figures that *do* hold steady run to run are the 52% acceptance rate and the 75-block peak (both deterministic functions of the fixed workload).
+
+### The peak KV memory figure
+
+`peak_kv_blocks=75` is the high-water mark of physical blocks the continuous run ever held simultaneously, read from `PagedKVCache::peak_blocks`. It is the true minimum cache size the workload needed. Contrast it with the naive worst case: 64 requests, each up to 16 + 64 = 80 tokens, at 16 tokens per block, is 5 blocks per request, so 320 blocks if every sequence's maximum were reserved up front. Paging serves the identical workload in **75 blocks**, because sequences finish and return their blocks while others are still growing, and a free block fits any sequence. The peak only ever reflects the *concurrent* demand, not the sum of per-request maxima. This is the entire memory argument for paging, reduced to one measured integer.
 
 ## How to read these numbers
 

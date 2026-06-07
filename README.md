@@ -63,7 +63,7 @@ flowchart TD
 
 ```bash
 git clone https://github.com/sarmakska/forge-infer && cd forge-infer
-cargo test                                   # 37 tests across the serving stack
+cargo test                                   # 38 tests across the serving stack
 cargo run --release --bin forge-infer        # serves 127.0.0.1:8080 (set FORGE_ADDR to change)
 ```
 
@@ -88,6 +88,8 @@ Measured with `cargo run --release --bin forge-bench` on an Apple M3 Pro (macOS 
 | speculative (lookahead=4) | ~0.59M | 0.10 | acceptance 52%, output exact |
 
 Read these for shape, not magnitude. With a near-free model the continuous-vs-sequential gap (around 1.1x here) is mostly scheduler overhead; the win only grows large once the model forward pass is the expensive part, because keeping the batch full then dwarfs the bookkeeping. The figure that carries across to a real model is the **52% acceptance rate**: just over half the draft's proposals are reused without a target recompute, and each accepted token skips a target step. Numbers drift a few percent run to run with machine load.
+
+The benchmark also prints `peak_kv_blocks`, the high-water mark of physical blocks the continuous run ever held at once. On this workload it lands at **75 blocks**. Pre-reserving the worst case (64 requests, each up to 80 tokens, 16 tokens per block, 5 blocks apiece) would demand 320 blocks. Paging serves the identical workload in 75 because sequences finish and free their blocks while others are still growing, so a real cache only ever has to be sized to the *concurrent* peak, not the sum of per-request maxima. That single measured number, surfaced by `PagedKVCache::peak_blocks`, is the whole case for paging.
 
 ## Design decisions
 

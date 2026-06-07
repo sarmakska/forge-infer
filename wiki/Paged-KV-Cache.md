@@ -26,6 +26,7 @@ pub struct PagedKVCache {
     num_blocks: usize,
     free_list: Vec<BlockId>,        // a stack; pop from the back keeps freed blocks hot
     tables: HashMap<SeqId, BlockTable>,
+    peak_blocks: usize,             // high-water mark of simultaneously used blocks
 }
 ```
 
@@ -36,6 +37,12 @@ The key operations, all in `src/paged_cache.rs`:
 - `append(seq, count)` reserves the blocks and records the tokens. It is **transactional**: it pre-checks the free count and returns `OutOfBlocks { needed, free }` without touching state if the cache cannot grow the sequence, so the scheduler can preempt and retry safely.
 - `free(seq)` returns every block to the free list and forgets the sequence. It is idempotent, so the scheduler can free freely.
 - `evict_largest()` frees the sequence holding the most blocks, the fallback when even preempting the running batch cannot place a new sequence.
+
+### Observability
+
+Alongside the live counters (`free_blocks`, `used_blocks`, `utilisation`, `internal_fragmentation`) the cache records a lifetime high-water mark:
+
+- `peak_blocks()` returns the largest number of blocks ever held simultaneously. It only ever moves inside `append`, since allocation is the only operation that grows usage, so tracking it costs one `max` per successful append and nothing else. This is the true minimum cache size the workload needed: a run that peaked at `peak_blocks` would behave identically in a cache sized to exactly that many. The benchmark surfaces it as `peak_kv_blocks` to make the memory argument for paging concrete, see [Benchmarks](Benchmarks).
 
 ## Lazy growth in detail
 
@@ -74,7 +81,7 @@ After `free`, the freed blocks land back on the stack and the next sequence reus
 
 ## What the tests prove
 
-The suite in `src/paged_cache.rs` pins down the tricky behaviour: `allocate_and_free_round_trips`, `lazy_growth_only_allocates_when_a_block_fills`, `internal_fragmentation_is_bounded_by_block_size`, `out_of_blocks_is_reported_and_leaves_state_intact`, `no_external_fragmentation_after_interleaved_free`, `eviction_picks_the_largest_sequence`, `blocks_needed_accounts_for_slack` and `unknown_sequence_append_errors`.
+The suite in `src/paged_cache.rs` pins down the tricky behaviour: `allocate_and_free_round_trips`, `lazy_growth_only_allocates_when_a_block_fills`, `internal_fragmentation_is_bounded_by_block_size`, `out_of_blocks_is_reported_and_leaves_state_intact`, `no_external_fragmentation_after_interleaved_free`, `eviction_picks_the_largest_sequence`, `blocks_needed_accounts_for_slack`, `unknown_sequence_append_errors` and `peak_blocks_tracks_the_high_water_mark_not_the_current_use`, which checks that the peak holds when blocks are freed and does not fall on a later, smaller burst.
 
 ## Tuning
 
